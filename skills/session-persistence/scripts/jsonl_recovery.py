@@ -7,7 +7,6 @@ Usage:
     python3 jsonl_recovery.py find-sessions
     python3 jsonl_recovery.py status
 """
-
 import json
 import sys
 from datetime import datetime, timezone
@@ -52,10 +51,12 @@ def cmd_recover() -> None:
 
     collected: list[str] = []
     total_bytes = 0
+    # Normalize ts to UTC for comparison
+    ts_utc = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
 
     for jf in jsonl_files:
         file_mtime = datetime.fromtimestamp(jf.stat().st_mtime, tz=timezone.utc)
-        if file_mtime <= ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts:
+        if file_mtime <= ts_utc:
             continue
         with open(jf) as f:
             for line in f:
@@ -86,8 +87,8 @@ def cmd_recover() -> None:
         print("No new delta messages found after checkpoint timestamp.")
         return
 
-    delta_section = "\n\n### 📡 Recovered Delta\n"
-    delta_section += f"_delta_since_last: {ts.isoformat()} → now_\n"
+    delta_section = "\n\n### \U0001f4e1 Recovered Delta\n"
+    delta_section += f"_delta_since_last: {ts.isoformat()} \u2192 now_\n"
     for entry in collected:
         delta_section += f"\n{entry}\n"
 
@@ -103,7 +104,7 @@ def cmd_find_sessions() -> None:
         return
     for f in files:
         mtime = datetime.fromtimestamp(f.stat().st_mtime).isoformat()
-        print(f"{mtime}  {f}")
+        print(f"{mtime} {f}")
 
 
 def cmd_status() -> None:
@@ -113,7 +114,7 @@ def cmd_status() -> None:
     print(f"jsonl_files_found: {len(files)}")
     if files:
         newest = datetime.fromtimestamp(files[0].stat().st_mtime).isoformat()
-        print(f"newest_jsonl: {newest}  {files[0].name}")
+        print(f"newest_jsonl: {newest} {files[0].name}")
 
 
 def main() -> None:
