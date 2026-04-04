@@ -13,14 +13,40 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CHECKPOINT_FILE = Path.home() / ".openclaw/workspace/memory/session-checkpoint.md"
+# OpenClaw stores session transcripts under ~/.openclaw/agents/<agent>/sessions
+AGENTS_DIR = Path.home() / ".openclaw/agents"
+# Fallback: also scan memory directory for any .jsonl files
 MEMORY_DIR = Path.home() / ".openclaw/workspace/memory"
 MAX_DELTA_BYTES = 2048
 MAX_MESSAGES = 5
 
 
 def find_jsonl_files() -> list[Path]:
-    """Find all .jsonl session files in the memory directory."""
-    return sorted(MEMORY_DIR.glob("**/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    """Find all .jsonl session files from agent session store and memory directory."""
+    found: list[Path] = []
+    # Primary: agent session directories
+    if AGENTS_DIR.exists():
+        found.extend(AGENTS_DIR.glob("*/sessions/*.jsonl"))
+    # Fallback: memory directory
+    if MEMORY_DIR.exists():
+        found.extend(MEMORY_DIR.glob("**/*.jsonl"))
+    # Deduplicate and sort by mtime descending
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for p in found:
+        resolved = p.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(p)
+    return sorted(unique, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _normalize_ts(ts_str: str) -> str:
+    """Normalize ISO timestamp: replace trailing Z with +00:00 for fromisoformat."""
+    ts_str = ts_str.strip()
+    if ts_str.endswith("Z"):
+        ts_str = ts_str[:-1] + "+00:00"
+    return ts_str
 
 
 def get_checkpoint_timestamp() -> datetime | None:
@@ -32,9 +58,27 @@ def get_checkpoint_timestamp() -> datetime | None:
             if "_last_updated:" in line:
                 ts_str = line.split("_last_updated:")[-1].strip().rstrip("_").strip()
                 try:
-                    return datetime.fromisoformat(ts_str)
+                    return datetime.fromisoformat(_normalize_ts(ts_str))
                 except ValueError:
                     return None
+    return None
+
+
+def _extract_content(msg: dict) -> str | None:
+    """Extract assistant content from a message dict.
+
+    Handles both flat records {"role": ..., "content": ...} and
+    OpenClaw envelope records {"type": "message", "message": {"role": ..., "content": ...}}.
+    """
+    # Envelope format
+    if msg.get("type") == "message" and isinstance(msg.get("message"), dict):
+        inner = msg["message"]
+        if inner.get("role") == "assistant":
+            return inner.get("content", "") or None
+        return None
+    # Flat format
+    if msg.get("role") == "assistant":
+        return msg.get("content", "") or None
     return None
 
 
@@ -67,9 +111,7 @@ def cmd_recover() -> None:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if msg.get("role") != "assistant":
-                    continue
-                content = msg.get("content", "")
+                content = _extract_content(msg)
                 if not content:
                     continue
                 entry = f"**[{jf.stem}]** {content[:200]}"
