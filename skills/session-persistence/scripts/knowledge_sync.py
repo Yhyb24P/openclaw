@@ -10,13 +10,14 @@ Usage:
 """
 import sys
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 _DEFAULT_CHECKPOINT = Path.home() / ".openclaw/workspace/memory/session-checkpoint.md"
 _DEFAULT_KNOWLEDGE_GRAPH = Path.home() / ".openclaw/workspace/memory/knowledge-graph.md"
 PREFIX_MATCH_CHARS = 50
 
 
-def _resolve_files(target_dir: Path | None) -> tuple[Path, Path]:
+def _resolve_files(target_dir: Optional[Path]) -> Tuple[Path, Path]:
     """Return (checkpoint_file, knowledge_graph_file) based on optional --dir override."""
     if target_dir is not None:
         checkpoint = target_dir / "session-checkpoint.md"
@@ -27,26 +28,26 @@ def _resolve_files(target_dir: Path | None) -> tuple[Path, Path]:
     return checkpoint, knowledge_graph
 
 
-def extract_key_decisions(text: str) -> list[str]:
+def extract_key_decisions(text: str) -> List[str]:
     """Extract items from the Key Decisions section of a checkpoint."""
-    decisions: list[str] = []
+    decisions: List[str] = []
     in_section = False
     for line in text.splitlines():
-        if "### \U0001f5dd Key Decisions" in line or "### Key Decisions" in line:
+        if "### \U0001f5dd Key Decisions" in line or "### \U0001f511 Key Decisions" in line or "### Key Decisions" in line:
             in_section = True
             continue
         if in_section:
-            if line.startswith("### ") or line.startswith("## "):
+            if line.startswith("###") or line.startswith("##"):
                 break
             stripped = line.strip()
-            if stripped.startswith("- ") and len(stripped) > 2:
+            if stripped.startswith("-") and len(stripped) > 2:
                 decisions.append(stripped[2:].strip())
     return decisions
 
 
-def get_pending_updates(text: str) -> list[str]:
-    """Extract items from the pending update section of knowledge-graph."""
-    updates: list[str] = []
+def get_pending_updates(text: str) -> List[str]:
+    """Extract pending-update items from knowledge-graph."""
+    updates: List[str] = []
     in_section = False
     for line in text.splitlines():
         if "pending-update" in line.lower():
@@ -56,29 +57,29 @@ def get_pending_updates(text: str) -> list[str]:
             if line.startswith("##") and "pending" not in line.lower():
                 break
             stripped = line.strip()
-            if stripped.startswith("- ") and len(stripped) > 2:
+            if stripped.startswith("-") and len(stripped) > 2:
                 updates.append(stripped[2:].strip())
     return updates
 
 
-def _normalize_existing(lines: list[str]) -> list[str]:
-    """Strip list-item prefix from existing file lines for duplicate comparison."""
+def _normalize_existing(lines: List[str]) -> List[str]:
+    """Strip list-item prefixes from existing file lines for duplicate comparison."""
     result = []
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("- ") and len(stripped) > 2:
+        if stripped.startswith("-") and len(stripped) > 2:
             result.append(stripped[2:].strip())
         else:
             result.append(stripped)
     return result
 
 
-def is_duplicate(decision: str, existing_normalized: list[str]) -> bool:
+def is_duplicate(decision: str, existing_normalized: List[str]) -> bool:
     prefix = decision[:PREFIX_MATCH_CHARS].lower()
     return any(e[:PREFIX_MATCH_CHARS].lower() == prefix for e in existing_normalized)
 
 
-def cmd_push(target_dir: Path | None = None) -> None:
+def cmd_push(target_dir: Optional[Path] = None) -> None:
     """Push key decisions from checkpoint into knowledge-graph."""
     checkpoint_file, knowledge_graph_file = _resolve_files(target_dir)
     if not checkpoint_file.exists():
@@ -93,21 +94,21 @@ def cmd_push(target_dir: Path | None = None) -> None:
     existing_normalized = _normalize_existing(existing_text.splitlines())
     new_items = [d for d in decisions if not is_duplicate(d, existing_normalized)]
     if not new_items:
-        print("All decisions already present in knowledge-graph. Nothing to push.")
+        print("All decisions already present in knowledge-graph, nothing to add.")
         return
     knowledge_graph_file.parent.mkdir(parents=True, exist_ok=True)
     with open(knowledge_graph_file, "a") as f:
         f.write("\n")
         for item in new_items:
             f.write(f"- {item}\n")
-    print(f"Pushed {len(new_items)} new decision(s) to knowledge-graph.")
+    print(f"Pushed {len(new_items)} new decisions to knowledge-graph.")
 
 
-def cmd_pull(target_dir: Path | None = None) -> None:
+def cmd_pull(target_dir: Optional[Path] = None) -> None:
     """Pull pending updates from knowledge-graph back into checkpoint."""
     checkpoint_file, knowledge_graph_file = _resolve_files(target_dir)
     if not knowledge_graph_file.exists():
-        print(f"ERROR: Knowledge graph file not found: {knowledge_graph_file}")
+        print(f"ERROR: Knowledge-graph file not found: {knowledge_graph_file}")
         sys.exit(1)
     kg_text = knowledge_graph_file.read_text()
     updates = get_pending_updates(kg_text)
@@ -122,14 +123,14 @@ def cmd_pull(target_dir: Path | None = None) -> None:
         return
     checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
     with open(checkpoint_file, "a") as f:
-        f.write("\n### \U0001f4e5 Pulled from Knowledge Graph\n")
+        f.write("\n### \U0001f4e5 Pulled from Knowledge-Graph\n")
         for item in new_items:
             f.write(f"- {item}\n")
-    print(f"Pulled {len(new_items)} update(s) from knowledge-graph into checkpoint.")
+    print(f"Pulled {len(new_items)} updates from knowledge-graph to checkpoint.")
 
 
-def cmd_diff(target_dir: Path | None = None) -> None:
-    """Show decisions in checkpoint not yet in knowledge-graph."""
+def cmd_diff(target_dir: Optional[Path] = None) -> None:
+    """Show checkpoint decisions not yet in knowledge-graph."""
     checkpoint_file, knowledge_graph_file = _resolve_files(target_dir)
     if not checkpoint_file.exists():
         print(f"ERROR: Checkpoint file not found: {checkpoint_file}")
@@ -140,14 +141,14 @@ def cmd_diff(target_dir: Path | None = None) -> None:
     existing_normalized = _normalize_existing(existing_text.splitlines())
     new_items = [d for d in decisions if not is_duplicate(d, existing_normalized)]
     if not new_items:
-        print("knowledge-graph is up to date. No diff.")
+        print("Knowledge-graph is up to date, no diff.")
     else:
-        print(f"{len(new_items)} decision(s) not yet in knowledge-graph:")
+        print(f"{len(new_items)} decisions not yet in knowledge-graph:")
         for item in new_items:
             print(f"  + {item}")
 
 
-def cmd_status(target_dir: Path | None = None) -> None:
+def cmd_status(target_dir: Optional[Path] = None) -> None:
     """Print sync status summary."""
     checkpoint_file, knowledge_graph_file = _resolve_files(target_dir)
     cp_exists = checkpoint_file.exists()
@@ -170,7 +171,7 @@ def main() -> None:
         sys.exit(1)
     cmd = args[0]
     rest = args[1:]
-    target_dir: Path | None = None
+    target_dir: Optional[Path] = None
     if "--dir" in rest:
         idx = rest.index("--dir")
         if idx + 1 < len(rest):
