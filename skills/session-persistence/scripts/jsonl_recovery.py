@@ -11,6 +11,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import List, Optional
 
 CHECKPOINT_FILE = Path.home() / ".openclaw/workspace/memory/session-checkpoint.md"
 # OpenClaw stores session transcripts under ~/.openclaw/agents/<agent>/sessions
@@ -21,9 +22,9 @@ MAX_DELTA_BYTES = 2048
 MAX_MESSAGES = 5
 
 
-def find_jsonl_files() -> list[Path]:
+def find_jsonl_files() -> List[Path]:
     """Find all .jsonl session files from agent session store and memory directory."""
-    found: list[Path] = []
+    found: List[Path] = []
     # Primary: agent session directories
     if AGENTS_DIR.exists():
         found.extend(AGENTS_DIR.glob("*/sessions/*.jsonl"))
@@ -31,8 +32,8 @@ def find_jsonl_files() -> list[Path]:
     if MEMORY_DIR.exists():
         found.extend(MEMORY_DIR.glob("**/*.jsonl"))
     # Deduplicate and sort by mtime descending
-    seen: set[Path] = set()
-    unique: list[Path] = []
+    seen = set()
+    unique: List[Path] = []
     for p in found:
         resolved = p.resolve()
         if resolved not in seen:
@@ -49,7 +50,7 @@ def _normalize_ts(ts_str: str) -> str:
     return ts_str
 
 
-def get_checkpoint_timestamp() -> datetime | None:
+def get_checkpoint_timestamp() -> Optional[datetime]:
     """Extract _last_updated timestamp from checkpoint file."""
     if not CHECKPOINT_FILE.exists():
         return None
@@ -64,7 +65,28 @@ def get_checkpoint_timestamp() -> datetime | None:
     return None
 
 
-def _extract_content(msg: dict) -> str | None:
+def _get_message_timestamp(msg: dict) -> Optional[datetime]:
+    """Extract timestamp from a message record if available."""
+    # Try envelope format timestamp fields
+    for key in ("timestamp", "created_at", "ts"):
+        val = msg.get(key)
+        if not val:
+            # check inside envelope
+            inner = msg.get("message", {})
+            if isinstance(inner, dict):
+                val = inner.get(key)
+        if val and isinstance(val, str):
+            try:
+                ts = datetime.fromisoformat(_normalize_ts(val))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                return ts
+            except ValueError:
+                pass
+    return None
+
+
+def _extract_content(msg: dict) -> Optional[str]:
     """Extract assistant content from a message dict.
 
     Handles both flat records {"role": ..., "content": ...} and
@@ -87,17 +109,14 @@ def cmd_recover() -> None:
     if ts is None:
         print("ERROR: No _last_updated timestamp found in checkpoint.")
         sys.exit(1)
-
     jsonl_files = find_jsonl_files()
     if not jsonl_files:
         print("No .jsonl session files found.")
         return
-
-    collected: list[str] = []
+    collected: List[str] = []
     total_bytes = 0
     # Normalize ts to UTC for comparison
     ts_utc = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
-
     for jf in jsonl_files:
         file_mtime = datetime.fromtimestamp(jf.stat().st_mtime, tz=timezone.utc)
         if file_mtime <= ts_utc:
@@ -111,6 +130,13 @@ def cmd_recover() -> None:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                # Filter by per-message timestamp if available
+                msg_ts = _get_message_timestamp(msg)
+                if msg_ts is not None:
+                    if msg_ts.tzinfo is None:
+                        msg_ts = msg_ts.replace(tzinfo=timezone.utc)
+                    if msg_ts <= ts_utc:
+                        continue
                 content = _extract_content(msg)
                 if not content:
                     continue
@@ -124,16 +150,13 @@ def cmd_recover() -> None:
                     break
         if len(collected) >= MAX_MESSAGES:
             break
-
     if not collected:
         print("No new delta messages found after checkpoint timestamp.")
         return
-
     delta_section = "\n\n### \U0001f4e1 Recovered Delta\n"
     delta_section += f"_delta_since_last: {ts.isoformat()} \u2192 now_\n"
     for entry in collected:
         delta_section += f"\n{entry}\n"
-
     with open(CHECKPOINT_FILE, "a") as f:
         f.write(delta_section)
     print(f"Recovered {len(collected)} message(s) ({total_bytes} bytes) appended to checkpoint.")
