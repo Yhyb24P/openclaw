@@ -11,6 +11,7 @@ Usage:
 """
 
 import json
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -47,10 +48,32 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _update_last_updated(ts: str) -> None:
+    """Update or insert _last_updated field in session-checkpoint.md."""
+    if not CHECKPOINT_FILE.exists():
+        return
+    content = CHECKPOINT_FILE.read_text()
+    pattern = r'(_last_updated:\s*)([^\n]*)'
+    replacement = f'_last_updated: {ts}'
+    if re.search(pattern, content):
+        new_content = re.sub(pattern, replacement, content)
+    else:
+        # Append _last_updated line near top if not found
+        lines = content.splitlines(keepends=True)
+        insert_idx = 0
+        for i, line in enumerate(lines):
+            if line.strip().startswith("#"):
+                insert_idx = i + 1
+                break
+        lines.insert(insert_idx, f"_last_updated: {ts}\n")
+        new_content = "".join(lines)
+    CHECKPOINT_FILE.write_text(new_content)
+
+
 def cmd_increment() -> None:
     state = load_state()
     if state.get("degraded"):
-        print("DEGRADED: checkpoint writes suspended. Run 'reset' to recover.")
+        print("Degraded: checkpoint writes paused. Run 'reset' to recover.")
         return
     state["rounds"] = state.get("rounds", 0) + 1
     save_state(state)
@@ -96,9 +119,11 @@ def _write_checkpoint(state: dict, kind: str) -> None:
     try:
         CHECKPOINT_FILE.parent.mkdir(parents=True, exist_ok=True)
         ts = now_iso()
-        header = f"\n<!-- checkpoint:{kind} at {ts} -->\n"
+        header = f"\n\n"
         with open(CHECKPOINT_FILE, "a") as f:
             f.write(header)
+        # Update _last_updated field in checkpoint file
+        _update_last_updated(ts)
         state["consecutiveFailures"] = 0
     except Exception as exc:
         failures = state.get("consecutiveFailures", 0) + 1
@@ -107,7 +132,7 @@ def _write_checkpoint(state: dict, kind: str) -> None:
             state["degraded"] = True
             print(f"ERROR: {exc}. Entering degraded mode after {failures} failures.")
         else:
-            print(f"ERROR: {exc}. Failure {failures}/{MAX_CONSECUTIVE_FAILURES}.")
+            print(f"ERROR: {exc}. Failures: {failures}/{MAX_CONSECUTIVE_FAILURES}.")
         save_state(state)
         raise
 
